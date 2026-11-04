@@ -16,13 +16,26 @@
       margin: 0;
       background-color: #f1f3f4;
     }
-    h2 { color: #202124; margin-bottom: 8px; }
-    #netStatus {
-      font-size: 13px;
-      font-weight: bold;
-      padding: 4px 12px;
-      border-radius: 20px;
+    h2 { color: #202124; margin-bottom: 6px; }
+    .top-badges {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+      justify-content: center;
       margin-bottom: 12px;
+    }
+    #netStatus, #deviceBadge {
+      font-size: 12px;
+      font-weight: bold;
+      padding: 5px 12px;
+      border-radius: 20px;
+    }
+    #deviceBadge {
+      background-color: #e8eaed;
+      color: #3c4043;
+      cursor: pointer;
+      border: 1px solid #dadce0;
     }
     .online-badge { background-color: #e6f4ea; color: #137333; }
     .offline-badge { background-color: #fce8e6; color: #c5221f; }
@@ -84,8 +97,12 @@
 </head>
 <body>
 
-  <h2>Heaven Plaza - Scanner</h2>
-  <div id="netStatus" class="online-badge">🟢 Online</div>
+  <h2>Live QR Scanner</h2>
+  
+  <div class="top-badges">
+    <div id="netStatus" class="online-badge">🟢 Online</div>
+    <div id="deviceBadge" onclick="renameDevice()" title="Tap to change mobile name">📱 ID: Loading... ✏️</div>
+  </div>
 
   <div id="reader"></div>
   <button id="startBtn" class="btn" onclick="initScanner()">🔊 Tap to Start Scanner</button>
@@ -100,6 +117,7 @@
     // 👇 PASTE YOUR GOOGLE APPS SCRIPT '/exec' URL BELOW 👇
     const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzRX5IYn-lAafoGPePBgUtc3ae9zTSrbK3MsZje7pGQI9Glj1JQcJOcBVc1PxFvXtZ6Yg/exec";
     const STORAGE_KEY = "offline_qr_scans_queue";
+    const DEVICE_ID_KEY = "scanner_unique_device_id";
     
     const SCAN_COOLDOWN_MS = 1200; 
     const SAME_CODE_DEBOUNCE_MS = 5000;
@@ -107,6 +125,7 @@
     const statusDiv = document.getElementById('status');
     const startBtn = document.getElementById('startBtn');
     const netStatus = document.getElementById('netStatus');
+    const deviceBadge = document.getElementById('deviceBadge');
     const queueBox = document.getElementById('queueBox');
     const queueText = document.getElementById('queueText');
     const html5QrCode = new Html5Qrcode("reader");
@@ -116,6 +135,36 @@
     let lastScannedCode = "";
     let lastScannedTime = 0;
     let audioCtx = null;
+
+    // --- 0. PERSISTENT MOBILE DEVICE ID ---
+    function getDeviceOS() {
+      const ua = navigator.userAgent;
+      if (/android/i.test(ua)) return "Android";
+      if (/iPad|iPhone|iPod/.test(ua)) return "iPhone";
+      return "Device";
+    }
+
+    function getOrCreateDeviceId() {
+      let devId = localStorage.getItem(DEVICE_ID_KEY);
+      if (!devId) {
+        // Generate a random 4-character alphanumeric ID once per phone
+        const randomCode = Math.random().toString(36).substring(2, 6).toUpperCase();
+        devId = `${getDeviceOS()}-${randomCode}`;
+        localStorage.setItem(DEVICE_ID_KEY, devId);
+      }
+      deviceBadge.innerText = `📱 ${devId} ✏️`;
+      return devId;
+    }
+
+    function renameDevice() {
+      const currentId = getOrCreateDeviceId();
+      const newName = prompt("Enter a recognizable name/ID for this mobile (e.g., Mobile-1, Gate-A, Rahul):", currentId);
+      if (newName && newName.trim() !== "") {
+        const cleanName = newName.trim();
+        localStorage.setItem(DEVICE_ID_KEY, cleanName);
+        deviceBadge.innerText = `📱 ${cleanName} ✏️`;
+      }
+    }
 
     // --- 1. LOCAL STORAGE QUEUE HELPERS ---
     function getQueue() {
@@ -142,9 +191,9 @@
       if (queue.length > 0) {
         queueBox.style.display = 'block';
         if (navigator.onLine) {
-          queueText.innerText = `${queue.length} scan(s) auto-uploading...`;
+          queueText.innerText = `${queue.length} scan(s) auto-uploading to Sheet...`;
         } else {
-          queueText.innerText = `${queue.length} scan(s) offline (will auto-upload when online)`;
+          queueText.innerText = `${queue.length} scan(s) stored offline (will auto-upload when online)`;
         }
       } else {
         queueBox.style.display = 'none';
@@ -193,7 +242,8 @@
 
       const scanItem = {
         scannedText: decodedText,
-        scanTime: new Date().toISOString()
+        scanTime: new Date().toISOString(),
+        deviceId: getOrCreateDeviceId() // Captures which mobile scanned the QR code
       };
 
       addToQueue(scanItem);
@@ -204,7 +254,7 @@
       setTimeout(() => {
         isCooldown = false;
         statusDiv.className = '';
-        statusDiv.innerText = `🟢 Ready!- next code\n(Last: ${decodedText})`;
+        statusDiv.innerText = `🟢 Ready! Point at next QR code\n(Last: ${decodedText})`;
       }, SCAN_COOLDOWN_MS);
 
       syncQueueInBackground();
@@ -233,13 +283,12 @@
 
           if (result.success) {
             const updatedQueue = getQueue();
-            updatedQueue.shift(); // Delete uploaded scan from local storage
+            updatedQueue.shift();
             saveQueue(updatedQueue);
           } else {
-            break; // Will automatically retry in 3 seconds
+            break;
           }
         } catch (err) {
-          // Network still warming up after offline mode -> break and let the 3-second heartbeat retry!
           break;
         }
       }
@@ -252,14 +301,13 @@
     function updateNetworkBadge() {
       if (navigator.onLine) {
         netStatus.className = 'online-badge';
-        netStatus.innerText = '🟢 Online (Created by: Azim Bhayani)';
+        netStatus.innerText = '🟢 Online (Auto-Sync)';
         updateQueueUI();
-        // Trigger right away AND after 2s (when DNS is ready)
         syncQueueInBackground();
         setTimeout(syncQueueInBackground, 2000);
       } else {
         netStatus.className = 'offline-badge';
-        netStatus.innerText = '🔴 Offline (Created by: Azim Bhayani)';
+        netStatus.innerText = '🔴 Offline (Saving to Phone)';
         updateQueueUI();
       }
     }
@@ -267,14 +315,12 @@
     window.addEventListener('online', updateNetworkBadge);
     window.addEventListener('offline', updateNetworkBadge);
 
-    // Heartbeat: Every 3 seconds, automatically upload any queued scans if internet is available
     setInterval(() => {
       if (navigator.onLine && getQueue().length > 0 && !isSyncing) {
         syncQueueInBackground();
       }
     }, 3000);
 
-    // Also trigger auto-sync when switching back to the browser tab
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden && navigator.onLine) {
         syncQueueInBackground();
@@ -282,6 +328,7 @@
     });
 
     window.addEventListener('DOMContentLoaded', () => {
+      getOrCreateDeviceId();
       updateQueueUI();
       updateNetworkBadge();
     });
