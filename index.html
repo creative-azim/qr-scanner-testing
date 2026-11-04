@@ -34,11 +34,58 @@
     #deviceBadge {
       background-color: #e8eaed;
       color: #3c4043;
-      cursor: pointer;
       border: 1px solid #dadce0;
+      user-select: none;
     }
     .online-badge { background-color: #e6f4ea; color: #137333; }
     .offline-badge { background-color: #fce8e6; color: #c5221f; }
+    
+    /* One-Time Permanent Registration Card */
+    #setupCard {
+      background: #fff;
+      padding: 18px;
+      border-radius: 12px;
+      width: 100%;
+      max-width: 400px;
+      box-sizing: border-box;
+      margin-bottom: 16px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+      text-align: center;
+      display: none;
+      border: 2px solid #1a73e8;
+    }
+    #setupCard h3 {
+      margin: 0 0 6px 0;
+      color: #202124;
+      font-size: 17px;
+    }
+    #setupCard p {
+      margin: 0 0 12px 0;
+      font-size: 13px;
+      color: #c5221f;
+      font-weight: 600;
+    }
+    #nameInput {
+      width: 100%;
+      padding: 12px;
+      font-size: 16px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      box-sizing: border-box;
+      margin-bottom: 10px;
+    }
+    .lock-btn {
+      width: 100%;
+      padding: 12px;
+      font-size: 16px;
+      font-weight: bold;
+      background-color: #137333;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
     #reader {
       width: 100%;
       max-width: 400px;
@@ -101,7 +148,15 @@
   
   <div class="top-badges">
     <div id="netStatus" class="online-badge">🟢 Online</div>
-    <div id="deviceBadge" onclick="renameDevice()" title="Tap to change mobile name">📱 ID: Loading... ✏️</div>
+    <div id="deviceBadge">🔒 Unregistered Mobile</div>
+  </div>
+
+  <!-- One-Time Registration Card (Disappears forever once saved) -->
+  <div id="setupCard">
+    <h3>One-Time Mobile Registration</h3>
+    <p>⚠️ Warning: Once saved, this name is permanently locked to this phone and cannot be changed.</p>
+    <input type="text" id="nameInput" placeholder="Enter Your Name / Mobile No.">
+    <button class="lock-btn" onclick="lockUserName()">🔒 Lock & Save Permanently</button>
   </div>
 
   <div id="reader"></div>
@@ -117,7 +172,8 @@
     // 👇 PASTE YOUR GOOGLE APPS SCRIPT '/exec' URL BELOW 👇
     const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzRX5IYn-lAafoGPePBgUtc3ae9zTSrbK3MsZje7pGQI9Glj1JQcJOcBVc1PxFvXtZ6Yg/exec";
     const STORAGE_KEY = "offline_qr_scans_queue";
-    const DEVICE_ID_KEY = "scanner_unique_device_id";
+    const USER_NAME_KEY = "scanner_locked_user_name";
+    const DEVICE_TOKEN_KEY = "scanner_locked_device_token";
     
     const SCAN_COOLDOWN_MS = 1200; 
     const SAME_CODE_DEBOUNCE_MS = 5000;
@@ -126,6 +182,8 @@
     const startBtn = document.getElementById('startBtn');
     const netStatus = document.getElementById('netStatus');
     const deviceBadge = document.getElementById('deviceBadge');
+    const setupCard = document.getElementById('setupCard');
+    const nameInput = document.getElementById('nameInput');
     const queueBox = document.getElementById('queueBox');
     const queueText = document.getElementById('queueText');
     const html5QrCode = new Html5Qrcode("reader");
@@ -136,34 +194,78 @@
     let lastScannedTime = 0;
     let audioCtx = null;
 
-    // --- 0. PERSISTENT MOBILE DEVICE ID ---
+    // --- 0. DUAL-STORAGE (LOCALSTORAGE + 10-YEAR COOKIE) LOCK ---
+    function setPermanentValue(key, val) {
+      localStorage.setItem(key, val);
+      const d = new Date();
+      d.setTime(d.getTime() + (3650 * 24 * 60 * 60 * 1000)); // 10 years
+      document.cookie = `${key}=${encodeURIComponent(val)};expires=${d.toUTCString()};path=/;SameSite=Lax`;
+    }
+
+    function getPermanentValue(key) {
+      let val = localStorage.getItem(key);
+      if (!val) {
+        // Fallback: Check 10-year cookie if localStorage was cleared
+        const match = document.cookie.match(new RegExp('(^| )' + key + '=([^;]+)'));
+        if (match) {
+          val = decodeURIComponent(match[2]);
+          localStorage.setItem(key, val); // Restore to localStorage
+        }
+      }
+      return val;
+    }
+
     function getDeviceOS() {
       const ua = navigator.userAgent;
-      if (/android/i.test(ua)) return "Android";
-      if (/iPad|iPhone|iPod/.test(ua)) return "iPhone";
-      return "Device";
+      if (/android/i.test(ua)) return "AND";
+      if (/iPad|iPhone|iPod/.test(ua)) return "IOS";
+      return "DEV";
     }
 
-    function getOrCreateDeviceId() {
-      let devId = localStorage.getItem(DEVICE_ID_KEY);
-      if (!devId) {
-        // Generate a random 4-character alphanumeric ID once per phone
-        const randomCode = Math.random().toString(36).substring(2, 6).toUpperCase();
-        devId = `${getDeviceOS()}-${randomCode}`;
-        localStorage.setItem(DEVICE_ID_KEY, devId);
+    function getOrCreateDeviceToken() {
+      let token = getPermanentValue(DEVICE_TOKEN_KEY);
+      if (!token) {
+        const rand = Math.random().toString(36).substring(2, 6).toUpperCase() + "-" +
+                     Math.random().toString(36).substring(2, 6).toUpperCase();
+        token = `${getDeviceOS()}-${rand}`;
+        setPermanentValue(DEVICE_TOKEN_KEY, token);
       }
-      deviceBadge.innerText = `📱 ${devId} ✏️`;
-      return devId;
+      return token;
     }
 
-    function renameDevice() {
-      const currentId = getOrCreateDeviceId();
-      const newName = prompt("Enter a recognizable name/ID for this mobile (e.g., Mobile-1, Gate-A, Rahul):", currentId);
-      if (newName && newName.trim() !== "") {
-        const cleanName = newName.trim();
-        localStorage.setItem(DEVICE_ID_KEY, cleanName);
-        deviceBadge.innerText = `📱 ${cleanName} ✏️`;
+    function getLockedUserName() {
+      return getPermanentValue(USER_NAME_KEY);
+    }
+
+    function checkRegistrationState() {
+      const token = getOrCreateDeviceToken();
+      const lockedName = getLockedUserName();
+
+      if (lockedName) {
+        setupCard.style.display = 'none';
+        startBtn.style.display = 'block';
+        deviceBadge.innerText = `🔒 ${lockedName} (${token})`;
+      } else {
+        setupCard.style.display = 'block';
+        startBtn.style.display = 'none';
+        statusDiv.className = 'warning';
+        statusDiv.innerText = '⚠️ Complete one-time registration above to unlock scanner.';
       }
+    }
+
+    function lockUserName() {
+      const entered = nameInput.value.trim();
+      if (entered.length < 2) {
+        alert("Please enter your valid Name or Mobile ID.");
+        return;
+      }
+      const confirmLock = confirm(`Are you sure you want to lock this phone to "${entered}"?\n\nYou will NOT be able to change this later.`);
+      if (!confirmLock) return;
+
+      setPermanentValue(USER_NAME_KEY, entered);
+      checkRegistrationState();
+      statusDiv.className = 'success';
+      statusDiv.innerText = `✅ Phone permanently registered to ${entered}!\nTap "Start Scanner" above.`;
     }
 
     // --- 1. LOCAL STORAGE QUEUE HELPERS ---
@@ -226,8 +328,13 @@
 
     // --- 3. INSTANT NON-BLOCKING QR SCAN ---
     function handleScan(decodedText) {
-      const now = Date.now();
+      const lockedName = getLockedUserName();
+      if (!lockedName) {
+        checkRegistrationState();
+        return;
+      }
 
+      const now = Date.now();
       if (isCooldown) return;
       if (decodedText === lastScannedCode && (now - lastScannedTime) < SAME_CODE_DEBOUNCE_MS) {
         return;
@@ -243,7 +350,8 @@
       const scanItem = {
         scannedText: decodedText,
         scanTime: new Date().toISOString(),
-        deviceId: getOrCreateDeviceId() // Captures which mobile scanned the QR code
+        userName: lockedName,
+        deviceToken: getOrCreateDeviceToken()
       };
 
       addToQueue(scanItem);
@@ -328,13 +436,18 @@
     });
 
     window.addEventListener('DOMContentLoaded', () => {
-      getOrCreateDeviceId();
+      checkRegistrationState();
       updateQueueUI();
       updateNetworkBadge();
     });
 
     // --- 6. START CAMERA ---
     function initScanner() {
+      if (!getLockedUserName()) {
+        checkRegistrationState();
+        return;
+      }
+
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       playBeep();
 
