@@ -179,9 +179,9 @@
   <!-- One-Time Registration Card (Disappears forever once saved) -->
   <div id="setupCard">
     <h3>One-Time Mobile Registration</h3>
-    <p>⚠️ Warning: Once saved, this name is permanently locked to this phone and cannot be changed.</p>
+    <p>⚠️ Note: Once saved, this name is permanently locked and cannot be changed.</p>
     <input type="text" id="nameInput" placeholder="Enter Your Name / Mobile No.">
-    <button class="lock-btn" onclick="lockUserName()">🔒 Lock & Save Permanently</button>
+    <button class="lock-btn" onclick="lockUserName()">🔒 Save Permanently</button>
   </div>
 
   <div id="reader"></div>
@@ -283,7 +283,7 @@
         alert("Please enter your valid Name or Mobile ID.");
         return;
       }
-      const confirmLock = confirm(`Are you sure you want to lock this phone to "${entered}"?\n\nYou will NOT be able to change this later.`);
+      const confirmLock = confirm(`Are you sure you want to save this Name "${entered}"?\n\nYou will NOT be able to change this later.`);
       if (!confirmLock) return;
 
       setPermanentValue(USER_NAME_KEY, entered);
@@ -317,7 +317,7 @@
       if (queue.length > 0) {
         queueBox.style.display = 'block';
         if (navigator.onLine) {
-          queueText.innerText = `${queue.length} scan(s) auto-uploading to Sheet...`;
+          queueText.innerText = `${queue.length} scan(s) auto-uploading to Server...`;
         } else {
           queueText.innerText = `${queue.length} scan(s) stored offline (will auto-upload)`;
         }
